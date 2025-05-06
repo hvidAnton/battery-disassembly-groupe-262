@@ -1,0 +1,509 @@
+Index: colorRecognition.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import cv2\r\nimport numpy as np\r\n\r\nclass CameraHandler:\r\n    def __init__(self, cam_port=0): # set to 0 use the computer camera, set it to 1 to use the webcam\r\n        self.cam = cv2.VideoCapture(cam_port)\r\n        if not self.cam.isOpened():\r\n            raise TypeError(\"Error: Could not open camera.\")\r\n\r\n        self.frameWidth = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))\r\n        self.frameHeight = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))\r\n        self.fourcc = cv2.VideoWriter.fourcc(*'mp4v')\r\n        self.out = cv2.VideoWriter('output.avi', self.fourcc, 20.0, (self.frameWidth, self.frameHeight))\r\n\r\n    def get_frame(self):\r\n        ret, frame = self.cam.read()\r\n        if not ret:\r\n            raise TypeError(\"Error: Could not read camera frame.\")\r\n        return frame\r\n\r\n    def release(self):\r\n        self.cam.release()\r\n        self.out.release()\r\n\r\n\r\nclass ObjectDetector:\r\n    def __init__(self):\r\n        self.red_positions = []\r\n        self.blue_positions = []\r\n        self.red_center_points = []\r\n        self.blue_center_points = []\r\n\r\n        # Red color ranges\r\n        self.lowerRed1 = np.array([0, 120, 70])\r\n        self.upperRed1 = np.array([10, 255, 255])\r\n        self.lowerRed2 = np.array([170, 120, 70])\r\n        self.upperRed2 = np.array([180, 255, 255])\r\n\r\n        # Blue color ranges\r\n        self.lowerBlue = np.array([100, 150, 50])\r\n        self.upperBlue = np.array([130, 255, 255])\r\n\r\n    def process_frame(self, frame):\r\n        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)\r\n\r\n        # Reset positions to store only the current frame's data\r\n        self.red_positions = []\r\n        self.blue_positions = []\r\n\r\n        # Masks\r\n        blue_mask = cv2.inRange(hsv, self.lowerBlue, self.upperBlue)\r\n        red_mask1 = cv2.inRange(hsv, self.lowerRed1, self.upperRed1)\r\n        red_mask2 = cv2.inRange(hsv, self.lowerRed2, self.upperRed2)\r\n        red_mask = red_mask1 + red_mask2\r\n\r\n        #definde contours\r\n        blue_contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)\r\n        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)\r\n\r\n        self.blue_center_points.clear(), self.red_center_points.clear()\r\n        self.detect_objects(blue_contours, frame, (255, 0, 0), \"Blue Box\", self.blue_positions, self.blue_center_points)\r\n        self.detect_objects(red_contours, frame, (0, 0, 255), \"Red Box\", self.red_positions, self.red_center_points)\r\n\r\n    def detect_objects(self, contours, frame, color, label, positions, center_points):\r\n        for contour in contours:\r\n            area = cv2.contourArea(contour)\r\n            if area > 2000:\r\n                x, y, w, h = cv2.boundingRect(contour)\r\n                positions.append((x, y, w, h))\r\n                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)\r\n                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)\r\n\r\n                centers = self.get_centers(x, y, w, h)\r\n                for centerX, centerY in centers:\r\n                    center_points.append((centerX, centerY))\r\n                    cv2.circle(frame, (centerX, centerY), 5, (0, 255, 0), -1)\r\n\r\n    @staticmethod\r\n    def get_centers(x, y, w, h):\r\n        n_centers = max(1, round((w * 1.2) / h))\r\n        step = w / (2 * n_centers)\r\n        return [(int(x + step * (2 * i + 1)), int(y + h / 2)) for i in range(n_centers)]\r\n\r\nclass Logger:\r\n    def __init__(self, grid_cols=4, grid_rows=2):\r\n        self.grid_cols = grid_cols  # 4\r\n        self.grid_rows = grid_rows  # 2\r\n\r\n    def get_grid_state(self, red_positions, blue_positions , red_center_points, blue_center_points):\r\n        grid_state = [[\"Empty\" for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]\r\n        red_box_positions = []\r\n        print(grid_state)\r\n\r\n        min_x = min((x for x, y, w, h in red_positions + blue_positions), default=0)\r\n        min_y = min((y for x, y, w, h in red_positions + blue_positions), default=0)\r\n        max_w = max((x + w for x, y, w, h in red_positions + blue_positions), default=0)\r\n        max_h = max((y + h for x, y, w, h in red_positions + blue_positions), default=0)\r\n\r\n        if max_w == min_x or max_h == min_y:\r\n            print(\"Warning: Division by zero detected, returning empty grid.\")\r\n            return grid_state\r\n\r\n        # Determine cell width and height for the 2x4 grid\r\n        cell_width = (max_w - min_x) / self.grid_cols\r\n        cell_height = (max_h - min_y) / self.grid_rows\r\n\r\n\r\n        for centerX, centerY in red_center_points + blue_center_points:\r\n            col = min(self.grid_cols - 1, max(0, int((centerX - min_x) / cell_width)))\r\n            row = min(self.grid_rows - 1, max(0, int((centerY - min_y) / cell_height)))\r\n\r\n            # Determine the color based on which list the center came from\r\n            if (centerX, centerY) in red_center_points:\r\n                red_box_positions.append([col, row])\r\n                color = \"Red\"\r\n            elif (centerX, centerY) in blue_center_points:\r\n                color = \"Blue\"\r\n            else:\r\n                print(f\"Error: Unexpected center point {centerX, centerY}.\")\r\n                continue\r\n\r\n            grid_state[row][col] = color\r\n\r\n\r\n        return red_box_positions\r\n\r\n    def get_grid_index_state(self, x, y, cell_width, cell_height):\r\n        col = min(self.grid_cols - 1, max(0, int(x // cell_width)))\r\n        row = min(self.grid_rows - 1, max(0, int(y // cell_height)))\r\n        return row * self.grid_cols + col\r\n\r\ndef main():\r\n    try:\r\n        camera_handler = CameraHandler()\r\n        object_detector = ObjectDetector()\r\n        logger = Logger()\r\n\r\n        while True:\r\n            frame = camera_handler.get_frame()\r\n\r\n\r\n            if cv2.waitKey(1) & 0xFF == ord('a'):\r\n                object_detector.process_frame(frame)\r\n                grid_state = logger.get_grid_state(object_detector.red_positions, object_detector.blue_positions, object_detector.red_center_points, object_detector.blue_center_points)\r\n                print(\"Grid State:\", grid_state)\r\n\r\n\r\n            cv2.imshow('Camera', frame)\r\n\r\n            if cv2.waitKey(5) & 0xFF == ord('q'):  # quit with \"q\"\r\n                break\r\n    except Exception as e:\r\n        print(f\"Error: {e}\")\r\n    finally:\r\n        cv2.destroyAllWindows()\r\n        CameraHandler.release()\r\n\r\n\r\nif __name__ == \"__main__\":\r\n    main()\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/colorRecognition.py b/colorRecognition.py
+--- a/colorRecognition.py	(revision 30fea2cbb1648f85573fda57e63907e807d2603b)
++++ b/colorRecognition.py	(date 1746533562823)
+@@ -1,12 +1,17 @@
+ import cv2
+ import numpy as np
++import time
+ 
+ class CameraHandler:
+-    def __init__(self, cam_port=0): # set to 0 use the computer camera, set it to 1 to use the webcam
+-        self.cam = cv2.VideoCapture(cam_port)
++    def __init__(self, cam_port=0):
++        self.cam = cv2.VideoCapture(cam_port, cv2.CAP_DSHOW)
+         if not self.cam.isOpened():
+             raise TypeError("Error: Could not open camera.")
+ 
++        # Reduce resolution for faster processing
++        self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
++        self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
++
+         self.frameWidth = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+         self.frameHeight = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+         self.fourcc = cv2.VideoWriter.fourcc(*'mp4v')
+@@ -89,7 +94,11 @@
+     def get_grid_state(self, red_positions, blue_positions , red_center_points, blue_center_points):
+         grid_state = [["Empty" for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
+         red_box_positions = []
+-        print(grid_state)
++
++        # Check if there are valid positions to process
++        if not red_positions and not blue_positions:
++            print("No objects detected. Returning empty grid.")
++            return grid_state
+ 
+         min_x = min((x for x, y, w, h in red_positions + blue_positions), default=0)
+         min_y = min((y for x, y, w, h in red_positions + blue_positions), default=0)
+@@ -100,6 +109,7 @@
+             print("Warning: Division by zero detected, returning empty grid.")
+             return grid_state
+ 
++
+         # Determine cell width and height for the 2x4 grid
+         cell_width = (max_w - min_x) / self.grid_cols
+         cell_height = (max_h - min_y) / self.grid_rows
+@@ -137,24 +147,36 @@
+ 
+         while True:
+             frame = camera_handler.get_frame()
++            key = cv2.waitKey(1) & 0xFF
+ 
+-
+-            if cv2.waitKey(1) & 0xFF == ord('a'):
++            if key == ord('a'):
++                start = time.time()
+                 object_detector.process_frame(frame)
+-                grid_state = logger.get_grid_state(object_detector.red_positions, object_detector.blue_positions, object_detector.red_center_points, object_detector.blue_center_points)
++                grid_state = logger.get_grid_state(
++                    object_detector.red_positions,
++                    object_detector.blue_positions,
++                    object_detector.red_center_points,
++                    object_detector.blue_center_points
++                )
+                 print("Grid State:", grid_state)
++                print("Detection Time: {:.3f} seconds".format(time.time() - start))
++                for i, (pickup_col, pickup_row) in enumerate(object_detector.red_positions):
++                    print(f"picking  red box {i} at:  {pickup_col}, {pickup_row}")
+ 
+-
+-            cv2.imshow('Camera', frame)
++                cv2.imshow('Processed Frame', frame)
++            else:
++                cv2.imshow('Camera', frame)
+ 
+-            if cv2.waitKey(5) & 0xFF == ord('q'):  # quit with "q"
++            if key == ord('q'):
+                 break
++
+     except Exception as e:
+         print(f"Error: {e}")
+     finally:
+         cv2.destroyAllWindows()
+-        CameraHandler.release()
++        camera_handler.release()
++
+ 
+ 
+ if __name__ == "__main__":
+-    main()
++    main()
+\ No newline at end of file
+Index: movement.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import colorRecognition\r\nimport numpy as np\r\nimport urx\r\nimport time\r\n\r\nclass RobotControl:\r\n    def __init__(self):\r\n\r\n\r\n        self.rob = urx.Robot(\"192.168.0.100\")\r\n        self.rob.set_tcp((0, 0, 0.142, 0, 0, 0))  # add tool schunk\r\n        self.rob.set_payload(2, (0, 0, 0.1))\r\n        time.sleep(0.2)  # leave some time to robot to process the setup commands\r\n\r\n        # Define base coordinates for the grid\r\n        self.x_base = 0.305704  # Base x-coordinate\r\n        self.y_base = -0.288771 # Base y-coordinate\r\n        self.z_base = 0.28589  # Base z-coordinate (table height)\r\n\r\n        # Define cell dimensions in robot coordinates\r\n        self.cell_width = 0.04695  # Cell width in meters\r\n        self.cell_height = 0.069813  # Cell height in meters\r\n\r\n        # Define approach distance (how far above object to position before going down)\r\n        self.approach_distance = 0.010  # 5cm above object\r\n\r\n        # Define home position\r\n        self.home_position = (340.479962, -360.100958, 93.090019, -127.279181, 127.279191, -0.122425)\r\n\r\n\r\n    def move_to_home(self):\r\n        print(\"home position\")\r\n        self.rob.movel(self.home_position, 0.3, 0.2)\r\n\r\n    def close(self):\r\n        self.rob.close()\r\n\r\n    def move(self, a=0.3, v=0.2):\r\n        # Get red box positions from color recognition module\r\n        print(\"Getting red box positions from camera...\")\r\n        red_positions = colorRecognition.get_grid_state()\r\n\r\n        print(f\"Detected {len(red_positions)} red positions: {red_positions}\")\r\n\r\n        self.move_to_home()\r\n        i = 0\r\n        for col, row in red_positions:\r\n            # Calculate pickup position\r\n            pickup_x = self.x_base + (col * self.cell_width)\r\n            pickup_y = self.y_base + (row * self.cell_height)\r\n            pickup_z = self.z_base\r\n\r\n            # Calculate approach positions (slightly above objects)\r\n            pickup_approach = (pickup_x, pickup_y, pickup_z + self.approach_distance, 0, 3.14, 0)\r\n\r\n            # Destination position (here we're placing all objects at column 0)\r\n            drop_x = self.x_base\r\n            drop_y = self.y_base + (i * self.cell_height)\r\n            drop_z = self.z_base\r\n            drop_approach = (drop_x, drop_y, drop_z + self.approach_distance, 0, 3.14, 0)\r\n            print(f\"Moving from position [{col}, {row}] to position [i]\")\r\n            i += 1\r\n\r\n\r\n            # Move to approach position above pickup\r\n            self.rob.movel(pickup_approach, a, v)\r\n\r\n            # Move down to pickup object\r\n            pickup_position = (pickup_x, pickup_y, pickup_z, 0, 3.14, 0)\r\n            self.rob.movel(pickup_position, a / 2, v / 2)\r\n\r\n            # Activate gripper\r\n            time.sleep(0.5)  # Replace\r\n\r\n            self.rob.movel(pickup_approach, a / 2, v / 2)\r\n\r\n            # Move to approach position\r\n            self.rob.movel(drop_approach, a, v)\r\n\r\n            # place object\r\n            drop_position = (drop_x, drop_y, drop_z, 0, 3.14, 0)\r\n            self.rob.movel(drop_position, a / 2, v / 2)  # Slower for precision\r\n\r\n            # open gripper\r\n            time.sleep(0.5)  # Replace with actual gripper control\r\n\r\n            # back up\r\n            print(\"Moving back up...\")\r\n            self.rob.movel(drop_approach, a / 2, v / 2)\r\n\r\n            # Return to home position between operations\r\n            self.move_to_home()\r\n\r\n    def wait_for_program(self):\r\n        while True:\r\n            time.sleep(0.1)  # sleep first since the robot may not have processed the command yet\r\n            if self.rob.is_program_running():\r\n                break\r\n\r\n\r\n# Example usage\r\nif __name__ == \"__main__\":\r\n    try:\r\n        print(\"Initializing robot control...\")\r\n        robot = RobotControl()\r\n\r\n        print(\"Moving to home position...\")\r\n        robot.move_to_home()\r\n\r\n        print(\"Starting pick and place operations...\")\r\n        robot.move()\r\n\r\n        print(\"Operations completed successfully!\")\r\n\r\n    except Exception as e:\r\n        print(f\"Error: {e}\")\r\n    finally:\r\n        try:\r\n            print(\"Closing robot\")\r\n            robot.close()\r\n        except:\r\n            pass\r\n        print(\"Program terminated\")
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/movement.py b/movement.py
+--- a/movement.py	(revision 30fea2cbb1648f85573fda57e63907e807d2603b)
++++ b/movement.py	(date 1746533807505)
+@@ -1,123 +1,314 @@
+ import colorRecognition
+-import numpy as np
++import socket
+ import urx
+ import time
+ 
+ class RobotControl:
+-    def __init__(self):
+-
+-
+-        self.rob = urx.Robot("192.168.0.100")
+-        self.rob.set_tcp((0, 0, 0.142, 0, 0, 0))  # add tool schunk
+-        self.rob.set_payload(2, (0, 0, 0.1))
+-        time.sleep(0.2)  # leave some time to robot to process the setup commands
+-
+-        # Define base coordinates for the grid
+-        self.x_base = 0.305704  # Base x-coordinate
+-        self.y_base = -0.288771 # Base y-coordinate
+-        self.z_base = 0.28589  # Base z-coordinate (table height)
++    def __init__(self, gripper = None):
++        try:
++            print("Attempting to connect to robot...")
++            self.rob = urx.Robot("192.168.0.100")
++            print("Connected!")
++            self.gripper = gripper or GripperControl()
++
++            # Minimal setup commands
++            self.rob.set_tcp((0, 0, 0.142, 0, 0, 0))
++            self.rob.set_payload(2, (0, 0, 0.1))
++            time.sleep(0.5)  # Longer wait time after initial setup
++            # Define base coordinates for the grid
++            self.x_base = 0.30697110556293716  # Base x-coordinate
++            self.y_base = -0.42583099865300345  # Base y-coordinate
++            self.z_base = 0.025299262123034774  # Base z-coordinate (table height)
++
++            self.place_x_base = 0.3794308774795742
++            self.place_y_base = -0.18
++            self.place_z_base = 0.0222
++
++            # Define cell dimensions
++            self.cell_width = 0.0695  # Cell width in meters
++            self.cell_height = 0.0475  # Cell height in meters
++
++            # Define approach distance
++            self.approach_distance = 0.05  # 5cm above object
++
++            # Define timing for simulated pickup/place
++            self.action_pause = 0.1  # Pause at pickup/place points
++
++            # Speed settings - using very conservative values
++            self.default_acc = 3
++            self.default_vel = 2
++
++            self.home_position = [0.3321, -0.2866, 0.2435, -2.2962, -2.1409, -0.0055]
++
++        except Exception as e:
++            print(f"Error during initialization: {e}")
++            raise
+ 
+-        # Define cell dimensions in robot coordinates
+-        self.cell_width = 0.04695  # Cell width in meters
+-        self.cell_height = 0.069813  # Cell height in meters
++    def move_safely(self, position, acc=None, vel=None, msg="Moving", tolerance=0.005, move = "movel"):
++        acc = acc if acc is not None else self.default_acc
++        vel = vel if vel is not None else self.default_vel
+ 
+-        # Define approach distance (how far above object to position before going down)
+-        self.approach_distance = 0.010  # 5cm above object
++        print(f"{msg} to {position}")
++        self.rob.movel(position, acc=acc, vel=vel, wait=False)
+ 
+-        # Define home position
+-        self.home_position = (340.479962, -360.100958, 93.090019, -127.279181, 127.279191, -0.122425)
++        timeout = 15  # seconds
++        poll_interval = 0.002
++        stable_count_required = 5
+ 
++        start_time = time.time()
++        stable_count = 0
++        while time.time() - start_time < timeout:
++            current_pose = self.rob.getl()
++            diff = [abs(current_pose[i] - position[i]) for i in range(6)]
++            within_tol = all(d <= tolerance for d in diff)
++            if within_tol:
++                stable_count += 1
++                #print(f"Pose within tolerance: {stable_count}/{stable_count_required}")
++                if stable_count >= stable_count_required:
++                    print("Movement complete and stable.")
++                    return True
++            else:
++                if stable_count > 0:
++                    print("Drift detected, resetting stability counter.")
++                stable_count = 0
+ 
+-    def move_to_home(self):
+-        print("home position")
+-        self.rob.movel(self.home_position, 0.3, 0.2)
++            # Optional: Check if robot velocity is near zero (requires RTDE or get actual TCP speed)
++            time.sleep(poll_interval)
++
++        print("Timeout: Robot did not reach target pose in time.")
++        return False
+ 
+     def close(self):
+-        self.rob.close()
++
++        """Safely close the robot connection"""
++        print("Closing robot connection...")
++        try:
++            self.rob.close()
++            print("Robot connection closed successfully")
++        except Exception as e:
++            print(f"Error closing robot connection: {e}")
++
++    def get_current_pos(self):
++        """Get current robot position with error handling"""
++        try:
++            pos = self.rob.getl()
++            print(f"Current position: {pos}")
++            return pos
++        except Exception as e:
++            print(f"Error getting position: {e}")
++            return None
++
++    def run_remove_lid(self):
++        print("\n--- Starting lid removal operation ---")
++
++        lid_pick_position = [0.34549378894943444, -0.3595, 0.040825714378415756, 2.2975385808058735,
++                             2.1422846609552124, 0.0]
++        lid_place_position = [0.12724451121394884, -0.3595, 0.013353012293422756, 2.2976229488468403,
++                              2.142284028861523, 0.0]
++
++        # Move above pickup point
++        approach_above = lid_pick_position.copy()
++        approach_above[2] += self.approach_distance
++
++        self.move_safely(approach_above, msg="Approaching lid pickup")
++        self.move_safely(lid_pick_position, acc=self.default_acc, vel=self.default_vel, msg="Picking up lid")
++
++        self.gripper.close()
+ 
+-    def move(self, a=0.3, v=0.2):
+-        # Get red box positions from color recognition module
+-        print("Getting red box positions from camera...")
+-        red_positions = colorRecognition.get_grid_state()
++        self.move_safely(approach_above, msg="Retracting lid")
+ 
+-        print(f"Detected {len(red_positions)} red positions: {red_positions}")
++        # Move to place position
++        approach_place = lid_place_position.copy()
++        approach_place[2] += self.approach_distance
+ 
+-        self.move_to_home()
+-        i = 0
+-        for col, row in red_positions:
+-            # Calculate pickup position
+-            pickup_x = self.x_base + (col * self.cell_width)
+-            pickup_y = self.y_base + (row * self.cell_height)
++        self.move_safely(approach_place, msg="Approaching lid place")
++        self.move_safely(lid_place_position, acc=self.default_acc, vel=self.default_vel, msg="Placing lid")
++
++        self.gripper.open()
++
++        self.move_safely(approach_place, msg="Retracting after lid place")
++
++        print("Lid removal complete")
++
++    def run_single_pickup_place(self, pickup_col=0, pickup_row=0, place_col=0, place_row=0):
++        """Run a single pickup and place operation with extensive error handling"""
++        print(f"\n--- Starting pickup/place operation [{pickup_col},{pickup_row}] to [{place_col}] ---")
++        try:
++            # Calculate pickup coordinates
++            pickup_x = self.x_base + (pickup_col * self.cell_width)
++            pickup_y = self.y_base + (pickup_row * self.cell_height)
+             pickup_z = self.z_base
+ 
+-            # Calculate approach positions (slightly above objects)
++            # Calculate place coordinates
++            place_x = self.place_x_base - (place_row * self.cell_width)
++            place_y = self.place_y_base + (place_col * self.cell_height)
++            place_z = self.place_z_base
++
++
++            # Calculate approach positions
+             pickup_approach = (pickup_x, pickup_y, pickup_z + self.approach_distance, 0, 3.14, 0)
+-
+-            # Destination position (here we're placing all objects at column 0)
+-            drop_x = self.x_base
+-            drop_y = self.y_base + (i * self.cell_height)
+-            drop_z = self.z_base
+-            drop_approach = (drop_x, drop_y, drop_z + self.approach_distance, 0, 3.14, 0)
+-            print(f"Moving from position [{col}, {row}] to position [i]")
+-            i += 1
++            place_approach = (place_x, place_y, place_z + self.approach_distance, 0, 3.14, 0)
+ 
+-
+-            # Move to approach position above pickup
+-            self.rob.movel(pickup_approach, a, v)
+-
+-            # Move down to pickup object
++            # Full positions
+             pickup_position = (pickup_x, pickup_y, pickup_z, 0, 3.14, 0)
+-            self.rob.movel(pickup_position, a / 2, v / 2)
++            place_position = (place_x, place_y, place_z, 0, 3.14, 0)
++
++            # Execute the sequence with confirmation at each step
++            steps = [
++                ("move to pickup approach", pickup_approach),
++                ("move to pickup position", pickup_position ),
++                ("move back to pickup approach", pickup_approach),
++                ("move to place approach", place_approach),
++                ("move to place position", place_position),
++                ("move back to place approach", place_approach)
++            ]
+ 
+-            # Activate gripper
+-            time.sleep(0.5)  # Replace
++            for step_name, position in steps:
++                print(f"\nStep: {step_name}")
++                # Use lower speed for actual pickup/place movements
++                if "to pickup position" in step_name or "to place position" in step_name:
++                    acc, vel = self.default_acc / 2, self.default_vel / 2  # pickup or place set the speed in half
++                else:
++                    acc, vel = self.default_acc, self.default_vel  # set the speed to normal
+ 
+-            self.rob.movel(pickup_approach, a / 2, v / 2)
++                success = self.move_safely(position, acc, vel, msg=f"Executing {step_name}")  # try top move
++                if not success:
++                    print(f"Failed at step: {step_name}")
++                    return False
+ 
+-            # Move to approach position
+-            self.rob.movel(drop_approach, a, v)
++                if step_name == "move to pickup position" or step_name == "move to place position":
++                    if 'pickup' in step_name:
++                        print("pickup")
++                        self.gripper.close()
++                    elif 'place' in step_name:
++                        print("place")
++                        self.gripper.open()
++                    else:
++                        pass
++                    time.sleep(self.action_pause)
+ 
+-            # place object
+-            drop_position = (drop_x, drop_y, drop_z, 0, 3.14, 0)
+-            self.rob.movel(drop_position, a / 2, v / 2)  # Slower for precision
++            print("\nOperation completed successfully!")
++            return True
+ 
+-            # open gripper
+-            time.sleep(0.5)  # Replace with actual gripper control
++        except Exception as e:
++            print(f"\nError during operation: {e}")
++            return False
+ 
+-            # back up
+-            print("Moving back up...")
+-            self.rob.movel(drop_approach, a / 2, v / 2)
++class GripperControl:
++    _instance = None  # class-level variable for singleton behavior
++    def __new__(cls):
++        if cls._instance is None:
++            cls._instance = super(GripperControl, cls).__new__(cls)
++            cls._instance._initialized = False
++        return cls._instance
+ 
+-            # Return to home position between operations
+-            self.move_to_home()
++    def __init__(self):
++        if self._initialized:
++            return  # avoid re-initializing
++        self._initialized = True
+ 
+-    def wait_for_program(self):
+-        while True:
+-            time.sleep(0.1)  # sleep first since the robot may not have processed the command yet
+-            if self.rob.is_program_running():
+-                break
++        ROBOT_IP = "192.168.0.100"
++        PORT = 30002  # URScript interface port
+ 
++        print("Connecting to gripper control server")
++        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
++        self.s.connect((ROBOT_IP, PORT))
++        time.sleep(1)
+ 
+-# Example usage
+-if __name__ == "__main__":
++        self.s.send(b'set_digital_out(5, True)\n')
++        time.sleep(0.05)
++        self.s.send(b'set_digital_out(6, True)\n')
++        time.sleep(0.25)
++
++    def open(self):
++        self.s.send(b'set_digital_out(7, False)\n')
++        time.sleep(0.05)
++        self.s.send(b'set_digital_out(6, True)\n')
++        time.sleep(0.25)
++
++    def close(self):
++        self.s.send(b'set_digital_out(6, False)\n')
++        time.sleep(0.05)
++        self.s.send(b'set_digital_out(7, True)\n')
++        time.sleep(0.25)
++
++    def shutdown(self):
++        self.s.close()
++        print("Gripper socket closed.")
++
++def run_color_pickup_place_sequence(robot):
++    """Runs the color pickup/place sequence"""
+     try:
+-        print("Initializing robot control...")
+-        robot = RobotControl()
+-
+-        print("Moving to home position...")
+-        robot.move_to_home()
++        # Remove the lid first
++        robot.run_remove_lid()
+ 
+-        print("Starting pick and place operations...")
+-        robot.move()
+-
+-        print("Operations completed successfully!")
++        # Initialize the camera handler and object detector
++        camera_handler = colorRecognition.CameraHandler()
++        object_detector = colorRecognition.ObjectDetector()
++        logger = colorRecognition.Logger()
++        print("Capturing frame and detecting objects...")
++        frame = camera_handler.get_frame()
++        object_detector.process_frame(frame)
++        # Get the red box positions from the grid state
++        red_positions = logger.get_grid_state(
++            object_detector.red_positions,
++            object_detector.blue_positions,
++            object_detector.red_center_points,
++            object_detector.blue_center_points
++        )
++        time.sleep(1)
++        print(f"Detected red positions: {red_positions[0]}")
++        if not red_positions:
++            print("No red objects detected. Aborting operation.")
++        else:
++            # Use detected positions for pickup
++            place_positions = list(range(len(red_positions)))
++            print(f"Running pickup/place sequences based on detected objects:")
++            for i, (pickup_col, pickup_row) in enumerate(red_positions):
++                place_row = i // 2
++                place_col = i % 2
++                success = robot.run_single_pickup_place(pickup_row, pickup_col, place_row, place_col)
++                if not success:
++                    print("Aborting sequence due to failure.")
++                    break
++        # Clean up camera resources
++        camera_handler.release()
+ 
+     except Exception as e:
+-        print(f"Error: {e}")
++        print(f"Error in color detection sequence: {e}")
+     finally:
++        # Ensure camera resources are released
+         try:
+-            print("Closing robot")
+-            robot.close()
++            camera_handler.release()
+         except:
+             pass
+-        print("Program terminated")
+\ No newline at end of file
++
++
++def main():
++    robot = None
++    gripper = None
++    try:
++        print("=== UR Robot Color Detection Control Program ===")
++        robot = RobotControl()
++        gripper = GripperControl()
++
++        gripper.open()
++        robot.gripper = gripper  # attach it to the robot if desired
++        robot.move_safely(robot.home_position, 0.2, 0.2, "home position")
++
++        while True:
++            input("\nPress Enter to run the color pickup/place sequence (Ctrl+C to exit)...")
++            run_color_pickup_place_sequence(robot)
++            robot.move_safely(robot.home_position, 0.2, 0.2, "home position")
++
++    except KeyboardInterrupt:
++        print("\nProgram interrupted by user. Exiting...")
++    finally:
++        if gripper:
++            gripper.shutdown()
++        if robot:
++            robot.close()
++
++
++if __name__ == "__main__":
++    main()
+\ No newline at end of file
