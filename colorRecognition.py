@@ -1,11 +1,16 @@
 import cv2
 import numpy as np
+import time
 
 class CameraHandler:
-    def __init__(self, cam_port=0): # set to 0 use the computer camera, set it to 1 to use the webcam
-        self.cam = cv2.VideoCapture(cam_port)
+    def __init__(self, cam_port=0):
+        self.cam = cv2.VideoCapture(cam_port, cv2.CAP_DSHOW)
         if not self.cam.isOpened():
             raise TypeError("Error: Could not open camera.")
+
+        # Reduce resolution for faster processing
+        self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
         self.frameWidth = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.frameHeight = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -89,7 +94,11 @@ class Logger:
     def get_grid_state(self, red_positions, blue_positions , red_center_points, blue_center_points):
         grid_state = [["Empty" for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
         red_box_positions = []
-        print(grid_state)
+
+        # Check if there are valid positions to process
+        if not red_positions and not blue_positions:
+            print("No objects detected. Returning empty grid.")
+            return grid_state
 
         min_x = min((x for x, y, w, h in red_positions + blue_positions), default=0)
         min_y = min((y for x, y, w, h in red_positions + blue_positions), default=0)
@@ -99,6 +108,7 @@ class Logger:
         if max_w == min_x or max_h == min_y:
             print("Warning: Division by zero detected, returning empty grid.")
             return grid_state
+
 
         # Determine cell width and height for the 2x4 grid
         cell_width = (max_w - min_x) / self.grid_cols
@@ -137,23 +147,33 @@ def main():
 
         while True:
             frame = camera_handler.get_frame()
+            key = cv2.waitKey(1) & 0xFF
 
-
-            if cv2.waitKey(1) & 0xFF == ord('a'):
+            if key == ord('a'):
+                start = time.time()
                 object_detector.process_frame(frame)
-                grid_state = logger.get_grid_state(object_detector.red_positions, object_detector.blue_positions, object_detector.red_center_points, object_detector.blue_center_points)
+                grid_state = logger.get_grid_state(
+                    object_detector.red_positions,
+                    object_detector.blue_positions,
+                    object_detector.red_center_points,
+                    object_detector.blue_center_points
+                )
                 print("Grid State:", grid_state)
+                print("Detection Time: {:.3f} seconds".format(time.time() - start))
 
+                cv2.imshow('Processed Frame', frame)
+            else:
+                cv2.imshow('Camera', frame)
 
-            cv2.imshow('Camera', frame)
-
-            if cv2.waitKey(5) & 0xFF == ord('q'):  # quit with "q"
+            if key == ord('q'):
                 break
+
     except Exception as e:
         print(f"Error: {e}")
     finally:
         cv2.destroyAllWindows()
-        CameraHandler.release()
+        camera_handler.release()
+
 
 
 if __name__ == "__main__":
