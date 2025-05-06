@@ -1,21 +1,16 @@
-from email.policy import default
-from operator import index
-
 import cv2
 import numpy as np
-import time
-
 
 class CameraHandler:
-    def __init__(self, cam_port=0):
-        self.cam = cv2.VideoCapture(cam_port, cv2.CAP_DSHOW)
+    def __init__(self, cam_port=0): # set to 0 use the computer camera, set it to 1 to use the webcam
+        self.cam = cv2.VideoCapture(cam_port)
         if not self.cam.isOpened():
             raise TypeError("Error: Could not open camera.")
 
-        self.frame_width = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.frame_height = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.frameWidth = int(self.cam.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.frameHeight = int(self.cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fourcc = cv2.VideoWriter.fourcc(*'mp4v')
-        self.out = cv2.VideoWriter('output.avi', self.fourcc, 20.0, (self.frame_width, self.frame_height))
+        self.out = cv2.VideoWriter('output.avi', self.fourcc, 20.0, (self.frameWidth, self.frameHeight))
 
     def get_frame(self):
         ret, frame = self.cam.read()
@@ -36,14 +31,14 @@ class ObjectDetector:
         self.blue_center_points = []
 
         # Red color ranges
-        self.lower_red1 = np.array([0, 120, 70])
-        self.upper_red1 = np.array([10, 255, 255])
-        self.lower_red2 = np.array([170, 120, 70])
-        self.upper_red2 = np.array([180, 255, 255])
+        self.lowerRed1 = np.array([0, 120, 70])
+        self.upperRed1 = np.array([10, 255, 255])
+        self.lowerRed2 = np.array([170, 120, 70])
+        self.upperRed2 = np.array([180, 255, 255])
 
         # Blue color ranges
-        self.lower_blue = np.array([100, 150, 50])
-        self.upper_blue = np.array([130, 255, 255])
+        self.lowerBlue = np.array([100, 150, 50])
+        self.upperBlue = np.array([130, 255, 255])
 
     def process_frame(self, frame):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -53,9 +48,9 @@ class ObjectDetector:
         self.blue_positions = []
 
         # Masks
-        blue_mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
-        red_mask1 = cv2.inRange(hsv, self.lower_red1, self.upper_red1)
-        red_mask2 = cv2.inRange(hsv, self.lower_red2, self.upper_red2)
+        blue_mask = cv2.inRange(hsv, self.lowerBlue, self.upperBlue)
+        red_mask1 = cv2.inRange(hsv, self.lowerRed1, self.upperRed1)
+        red_mask2 = cv2.inRange(hsv, self.lowerRed2, self.upperRed2)
         red_mask = red_mask1 + red_mask2
 
         #definde contours
@@ -76,11 +71,12 @@ class ObjectDetector:
                 cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
                 centers = self.get_centers(x, y, w, h)
-                for center_x, center_y in centers:
-                    center_points.append((center_x, center_y))
-                    cv2.circle(frame, (center_x, center_y), 5, (0, 255, 0), -1)
+                for centerX, centerY in centers:
+                    center_points.append((centerX, centerY))
+                    cv2.circle(frame, (centerX, centerY), 5, (0, 255, 0), -1)
 
-    def get_centers(self, x, y, w, h):
+    @staticmethod
+    def get_centers(x, y, w, h):
         n_centers = max(1, round((w * 1.2) / h))
         step = w / (2 * n_centers)
         return [(int(x + step * (2 * i + 1)), int(y + h / 2)) for i in range(n_centers)]
@@ -92,6 +88,7 @@ class Logger:
 
     def get_grid_state(self, red_positions, blue_positions , red_center_points, blue_center_points):
         grid_state = [["Empty" for _ in range(self.grid_cols)] for _ in range(self.grid_rows)]
+        red_box_positions = []
         print(grid_state)
 
         min_x = min((x for x, y, w, h in red_positions + blue_positions), default=0)
@@ -99,34 +96,38 @@ class Logger:
         max_w = max((x + w for x, y, w, h in red_positions + blue_positions), default=0)
         max_h = max((y + h for x, y, w, h in red_positions + blue_positions), default=0)
 
+        if max_w == min_x or max_h == min_y:
+            print("Warning: Division by zero detected, returning empty grid.")
+            return grid_state
+
         # Determine cell width and height for the 2x4 grid
         cell_width = (max_w - min_x) / self.grid_cols
         cell_height = (max_h - min_y) / self.grid_rows
 
 
-        for center_x, center_y in red_center_points + blue_center_points:
-            col = min(self.grid_cols - 1, max(0, int((center_x - min_x) / cell_width)))
-            row = min(self.grid_rows - 1, max(0, int((center_y - min_y) / cell_height)))
+        for centerX, centerY in red_center_points + blue_center_points:
+            col = min(self.grid_cols - 1, max(0, int((centerX - min_x) / cell_width)))
+            row = min(self.grid_rows - 1, max(0, int((centerY - min_y) / cell_height)))
 
             # Determine the color based on which list the center came from
-            if (center_x, center_y) in red_center_points:
+            if (centerX, centerY) in red_center_points:
+                red_box_positions.append([col, row])
                 color = "Red"
-            elif (center_x, center_y) in blue_center_points:
+            elif (centerX, centerY) in blue_center_points:
                 color = "Blue"
             else:
-                raise TypeError(f"Error: center not in red_positions or blue_positions.{center_x, center_y} {red_center_points + blue_center_points}")
+                print(f"Error: Unexpected center point {centerX, centerY}.")
+                continue
 
             grid_state[row][col] = color
 
-        return grid_state
 
-def get_grid_index_state(self, x, y, cell_width, cell_height):
-    col = min(self.grid_cols - 1, max(0, int(x // cell_width)))
-    row = min(self.grid_rows - 1, max(0, int(y // cell_height)))
-    return row * self.grid_cols + col
+        return red_box_positions
 
-
-
+    def get_grid_index_state(self, x, y, cell_width, cell_height):
+        col = min(self.grid_cols - 1, max(0, int(x // cell_width)))
+        row = min(self.grid_rows - 1, max(0, int(y // cell_height)))
+        return row * self.grid_cols + col
 
 def main():
     try:
@@ -136,10 +137,10 @@ def main():
 
         while True:
             frame = camera_handler.get_frame()
-            object_detector.process_frame(frame)
 
 
             if cv2.waitKey(1) & 0xFF == ord('a'):
+                object_detector.process_frame(frame)
                 grid_state = logger.get_grid_state(object_detector.red_positions, object_detector.blue_positions, object_detector.red_center_points, object_detector.blue_center_points)
                 print("Grid State:", grid_state)
 
@@ -152,7 +153,7 @@ def main():
         print(f"Error: {e}")
     finally:
         cv2.destroyAllWindows()
-        camera_handler.release()
+        CameraHandler.release()
 
 
 if __name__ == "__main__":
