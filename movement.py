@@ -297,7 +297,7 @@ def main():
         robot.move_safely(robot.home_position, 0.2, 0.2, "home position")
 
         while True:
-            input("\nPress Enter to run the color pickup/place sequence (Ctrl+C to exit)...")
+            input("\nPress Enter to run the color pickup/place sequence...")
             run_color_pickup_place_sequence(robot)
             robot.move_safely(robot.home_position, 0.2, 0.2, "home position")
 
