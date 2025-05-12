@@ -293,7 +293,6 @@ def main():
         gripper = GripperControl()
 
         gripper.open()
-        robot.gripper = gripper  # attach it to the robot if desired
         robot.move_safely(robot.home_position, 0.2, 0.2, "home position")
 
         while True:
